@@ -3,7 +3,8 @@ import sys
 import urllib.request
 import gzip
 import re
-from collections import deque
+from collections import deque, defaultdict
+import subprocess
 
 
 def parse_arguments():
@@ -17,6 +18,8 @@ def parse_arguments():
     parser.add_argument('--tree-output', choices=['on', 'off'], default='off',
                         help='режим вывода зависимостей в формате ascii-дерева')
     parser.add_argument('--max-depth', type=int, default=10, help='максимальная глубина анализа зависимостей')
+    parser.add_argument('--show-order', choices=['on', 'off'], default='off',
+                        help='режим вывода порядка загрузки зависимостей')
 
     return parser.parse_args()
 
@@ -133,6 +136,53 @@ def build_dependency_graph_bfs(packages, root_package, max_depth):
     return graph, cycles
 
 
+def calculate_install_order(graph, root_package):
+    in_degree = defaultdict(int)
+
+    for node in graph:
+        in_degree[node] = 0
+
+    for node, deps in graph.items():
+        for dep in deps:
+            in_degree[dep] += 1
+
+    queue = deque()
+    for node in graph:
+        if in_degree[node] == 0:
+            queue.append(node)
+
+    install_order = []
+    while queue:
+        current = queue.popleft()
+        install_order.append(current)
+
+        for neighbor in graph.get(current, []):
+            in_degree[neighbor] -= 1
+            if in_degree[neighbor] == 0:
+                queue.append(neighbor)
+
+    return install_order
+
+
+def get_apt_install_order(package_name):
+    try:
+        result = subprocess.run(['apt-cache', 'depends', package_name],
+                                capture_output=True, text=True, check=True)
+        lines = result.stdout.split('\n')
+
+        deps = []
+        for line in lines:
+            if line.strip().startswith('Depends:'):
+                dep = line.split(':', 1)[1].strip()
+                deps.append(dep.split()[0])
+
+        return deps
+    except subprocess.CalledProcessError:
+        return None
+    except FileNotFoundError:
+        return None
+
+
 def print_ascii_tree(graph, root, prefix="", is_last=True):
     if not graph:
         return
@@ -169,6 +219,7 @@ def main():
         print(f"version: {args.version}")
         print(f"tree-output: {args.tree_output}")
         print(f"max-depth: {args.max_depth}")
+        print(f"show-order: {args.show_order}")
         print()
 
         if args.test_mode == 'on':
@@ -202,6 +253,42 @@ def main():
         if args.tree_output == 'on':
             print("дерево зависимостей в ascii-формате:")
             print_ascii_tree(dependency_graph, args.package)
+            print()
+
+        if args.show_order == 'on':
+            print("=== РЕЖИМ ВЫВОДА ПОРЯДКА ЗАГРУЗКИ ===")
+
+            if cycles:
+                print("⚠️  невозможно рассчитать порядок загрузки из-за циклических зависимостей")
+            else:
+                install_order = calculate_install_order(dependency_graph, args.package)
+                print("порядок загрузки зависимостей:")
+                for i, pkg in enumerate(install_order, 1):
+                    print(f" {i:2d}. {pkg}")
+                print()
+
+                if args.test_mode == 'off':
+                    apt_order = get_apt_install_order(args.package)
+                    if apt_order:
+                        print("порядок загрузки через apt-cache depends:")
+                        for i, pkg in enumerate(apt_order, 1):
+                            print(f" {i:2d}. {pkg}")
+                        print()
+
+                        our_deps_set = set(dependency_graph.keys())
+                        apt_deps_set = set(apt_order)
+
+                        print("сравнение результатов:")
+                        print(f" - общие зависимости: {len(our_deps_set & apt_deps_set)}")
+                        print(f" - только в нашем анализе: {len(our_deps_set - apt_deps_set)}")
+                        print(f" - только в apt: {len(apt_deps_set - our_deps_set)}")
+
+                        if our_deps_set != apt_deps_set:
+                            print("\nвозможные причины расхождений:")
+                            print(" 1. apt учитывает архитектуру и версии пакетов")
+                            print(" 2. наш анализ может не учитывать альтернативные зависимости (оператор |)")
+                            print(" 3. apt использует дополнительные метаданные из репозитория")
+                            print(" 4. ограничение глубины анализа в нашем инструменте")
 
     except Exception as e:
         print(f"ошибка: {e}")
