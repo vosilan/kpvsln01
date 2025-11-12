@@ -1,70 +1,63 @@
-import os
-import socket
 import argparse
+import sys
+import os
 
 
-def execute_command(cmd_input):
-    parts = []
-    for part in cmd_input.split():
-        if part.startswith('$'):
-            var_name = part[1:]
-            parts.append(os.getenv(var_name, part))
-        else:
-            parts.append(part)
+def parse_arguments():
+    parser = argparse.ArgumentParser(description='Визуализатор графа зависимостей')
 
-    if not parts:
-        return
+    parser.add_argument('--package', required=True, help='имя анализируемого пакета')
+    parser.add_argument('--source', required=True, help='url репозитория или путь к файлу тестового репозитория')
+    parser.add_argument('--test-mode', choices=['on', 'off'], default='off',
+                        help='режим работы с тестовым репозиторием')
+    parser.add_argument('--version', help='версия пакета')
+    parser.add_argument('--tree-output', choices=['on', 'off'], default='off',
+                        help='режим вывода зависимостей в формате ascii-дерева')
+    parser.add_argument('--max-depth', type=int, default=10, help='максимальная глубина анализа зависимостей')
 
-    cmd = parts[0]
-    args = parts[1:]
+    return parser.parse_args()
 
-    if cmd == "exit":
-        return "exit"
-    elif cmd == "ls":
-        print(f"ls: {' '.join(args)}")
-    elif cmd == "cd":
-        if args:
-            print(f"cd: {args[0]}")
-        else:
-            print("cd: ~")
-    else:
-        print(f"{cmd}: команда не найдена")
+
+def validate_arguments(args):
+    errors = []
+
+    if not args.package or not args.package.strip():
+        errors.append("имя пакета не может быть пустым")
+
+    if not args.source or not args.source.strip():
+        errors.append("источник не может быть пустым")
+
+    if args.max_depth <= 0:
+        errors.append("максимальная глубина должна быть положительным числом")
+
+    if args.version and not args.version[0].isdigit():
+        errors.append("версия должна начинаться с цифры")
+
+    return errors
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--vfs')
-    parser.add_argument('--script')
-    args = parser.parse_args()
+    try:
+        args = parse_arguments()
 
-    print(f"DEBUG: VFS={args.vfs}, SCRIPT={args.script}")
+        errors = validate_arguments(args)
+        if errors:
+            print("ошибки в параметрах:")
+            for error in errors:
+                print(f" - {error}")
+            sys.exit(1)
 
-    if args.script:
-        if os.path.exists(args.script):
-            with open(args.script, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith('#'):
-                        user = os.getlogin()
-                        hostname = socket.gethostname()
-                        print(f"{user}@{hostname}$ {line}")
+        print("параметры конфигурации:")
+        print(f"package: {args.package}")
+        print(f"source: {args.source}")
+        print(f"test-mode: {args.test_mode}")
+        print(f"version: {args.version}")
+        print(f"tree-output: {args.tree_output}")
+        print(f"max-depth: {args.max_depth}")
 
-                        result = execute_command(line)
-                        if result == "exit":
-                            break
-        else:
-            print(f"Ошибка: скрипт {args.script} не найден")
-            return
-
-    while True:
-        user = os.getlogin()
-        hostname = socket.gethostname()
-        print(f"{user}@{hostname}$ ", end="")
-        cmd_input = input().strip()
-
-        result = execute_command(cmd_input)
-        if result == "exit":
-            break
+    except Exception as e:
+        print(f"критическая ошибка: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
